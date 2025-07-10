@@ -1,49 +1,35 @@
-"""Client module for interacting with the authorization service."""
-
+from fastapi import FastAPI, Header, Depends, HTTPException
+from typing import Optional
+import os
+from functools import wraps
 import requests
-from .config import get_config
-from .exceptions import (
-    AuthenticationError,
-    AuthorizationError,
-    ApiError
-)
 
 class AuthClient:
-    """Client for making authorization requests."""
-    
-    def __init__(self):
-        self.config = get_config()
-    
-    def validate_access(self, resource_id=None, resource_type=None, action=None, return_data=False):
-        """Validate access to a resource.
-        
-        Args:
-            resource_id (str, optional): ID of the resource to validate access for
-            resource_type (str, optional): Type of the resource (e.g., 'TENANT', 'USER', etc.)
-            action (str, optional): Action to validate (e.g., 'READ', 'WRITE', 'DELETE')
-            return_data (bool, optional): If True, returns full response data
-        
-        Returns:
-            Union[bool, dict]: If return_data is False, returns bool indicating access.
-                             If return_data is True, returns full response dict containing:
-                             - authorized (bool): Whether access is granted
-                             - user (dict): User details
-                             - tenant (dict): Tenant details
-                             - resources (list): Available resources
-                             - message (str): Response message
-        
-        Raises:
-            AuthenticationError: If JWT token is invalid
-            AuthorizationError: If access is denied
-            ApiError: If API request fails
-        """
+    def __init__(self, authorization: str = None, x_tenant: str = None):
+        """Initialize AuthClient with optional headers."""
+        self.auth_url = os.getenv('AUTH_SERVICE_URL')
+        if not self.auth_url:
+            raise ValueError("AUTH_SERVICE_URL environment variable is required")
+        self.authorization = authorization
+        self.x_tenant = x_tenant
+
+    def validate_access(
+        self,
+        resource_id: str = None,
+        resource_type: str = None,
+        action: str = None,
+        authorization: str = None,
+        x_tenant: str = None,
+        return_data: bool = False
+    ):
+        """Validate access using provided or instance headers"""
         headers = {
-            'Authorization': f'Bearer {self.config.jwt_token}',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': authorization or self.authorization,
         }
         
-        if self.config.x_tenant:
-            headers['x-tenant'] = str(self.config.x_tenant)
+        if x_tenant or self.x_tenant:
+            headers['x-tenant'] = x_tenant or self.x_tenant
         
         params = {}
         if resource_id:
@@ -52,16 +38,16 @@ class AuthClient:
             params['resourceType'] = resource_type
         if action:
             params['action'] = action
-        
+
         try:
             response = requests.get(
-                f'{self.config.auth_url}/validate',
+                f'{self.auth_url}/validate',
                 headers=headers,
                 params=params
             )
             
             if response.status_code == 401:
-                raise AuthenticationError("Invalid or expired JWT token")
+                raise AuthenticationError("Invalid or expired token")
             
             if response.status_code == 403:
                 raise AuthorizationError(f"Access denied to resource: {resource_id}")
@@ -70,47 +56,91 @@ class AuthClient:
                 raise ApiError(f"API request failed: {response.text}")
             
             data = response.json()
-            
-            # Return full response data if requested
-            if return_data:
-                return data
-            
-            return data.get('authorized', False)
+            return data if return_data else data.get('authorized', False)
             
         except requests.exceptions.RequestException as e:
             raise ApiError(f"Failed to connect to auth service: {str(e)}")
-    
-    def get_user_resources(self):
-        """Get all resources accessible to the current user.
-        
-        Returns:
-            dict: JSON response containing user's resources
-        
-        Raises:
-            AuthenticationError: If JWT token is invalid
-            ApiError: If API request fails
-        """
-        headers = {
-            'Authorization': f'Bearer {self.config.jwt_token}',
-            'Content-Type': 'application/json'
-        }
-        
-        if self.config.tenant_id:
-            headers['x-tenant'] = str(self.config.tenant_id)
-        
-        try:
-            response = requests.get(
-                f'{self.config.auth_url}/resources',
-                headers=headers
+
+def requires_auth(
+    resource_id: str = None,
+    resource_type: str = None,
+    action: str = None,
+    include_auth_data: bool = False
+):
+    """Authorization decorator that uses request headers"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(
+            authorization: str = Header(...),
+            x_tenant: str = Header(None),
+            *args,
+            **kwargs
+        ):
+            client = AuthClient(authorization=authorization, x_tenant=x_tenant)
+            auth_result = client.validate_access(
+                resource_id=resource_id,
+                resource_type=resource_type,
+                action=action,
+                return_data=include_auth_data
             )
             
-            if response.status_code == 401:
-                raise AuthenticationError("Invalid or expired JWT token")
+            if include_auth_data:
+                if not auth_result.get('authorized', False):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied to resource: {resource_id}"
+                    )
+                kwargs['auth_data'] = auth_result
+            else:
+                if not auth_result:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Access denied to resource: {resource_id}"
+                    )
             
-            if response.status_code != 200:
-                raise ApiError(f"API request failed: {response.text}")
-            
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            raise ApiError(f"Failed to connect to auth service: {str(e)}")
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Example usage:
+app = FastAPI()
+
+@app.get("/users/{user_id}")
+@requires_auth(
+    resource_id="user-123",
+    resource_type="USER",
+    action="READ",
+    include_auth_data=True
+)
+async def get_user(
+    user_id: str,
+    auth_data: dict = None
+):
+    return {
+        "user_id": user_id,
+        "authorized_by": auth_data['user']['name'],
+        "tenant": auth_data['tenant']['name']
+    }
+
+# Direct client usage
+@app.post("/documents")
+async def create_document(
+    document: dict,
+    authorization: str = Header(...),
+    x_tenant: str = Header(None)
+):
+    client = AuthClient(authorization=authorization, x_tenant=x_tenant)
+    auth_result = client.validate_access(
+        resource_type="DOCUMENT",
+        action="CREATE",
+        return_data=True
+    )
+    
+    if not auth_result['authorized']:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    return {
+        "message": "Document created",
+        "user": auth_result['user']['name'],
+        "tenant": auth_result['tenant']['name']
+    }
