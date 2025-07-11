@@ -1,14 +1,10 @@
 """Decorator module for authorization checks."""
 
 import functools
-from typing import Optional
-from fastapi import Request, HTTPException, Depends
-from .client import AuthClient
+from fastapi import Header, Request, HTTPException
+from .client import AuthClient, AuthenticationError, AuthorizationError, ApiError
 
-def requires_auth(resource_id: Optional[str] = None, 
-                 resource_type: Optional[str] = None, 
-                 action: Optional[str] = None, 
-                 include_auth_data: bool = False):
+def requires_auth(resource_id=None, resource_type=None, action=None, include_auth_data=False):
     """Decorator to check authorization before executing a function.
     
     Args:
@@ -16,34 +12,43 @@ def requires_auth(resource_id: Optional[str] = None,
         resource_type (str, optional): Type of the resource (e.g., 'TENANT', 'USER')
         action (str, optional): Action to validate (e.g., 'READ', 'WRITE', 'DELETE')
         include_auth_data (bool, optional): If True, passes auth response data to the decorated function
+    
+    Returns:
+        function: Decorated function that checks authorization
+    
+    Raises:
+        AuthenticationError: If JWT token is invalid
+        AuthorizationError: If access is denied
+        ApiError: If API request fails
+    
+    Example:
+        @requires_auth(resource_id="resource123", include_auth_data=True)
+        def protected_function(auth_data=None):
+            # auth_data contains user, tenant, and resource information
+            user = auth_data.get('user')
+            print(f"Hello {user['name']}")
     """
     def decorator(func):
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Get request from FastAPI context
-            from fastapi import Request
-            request = kwargs.get('request')
-            if not request:
-                from starlette.concurrency import iterate_in_threadpool
-                for key, value in kwargs.items():
-                    if isinstance(value, Request):
-                        request = value
-                        break
-            
-            if not request:
-                raise HTTPException(status_code=500, detail="Could not get request object")
-            
-            # Validate auth
+        async def wrapper(
+            request: Request,
+            authorization: str = Header(None),
+            x_tenant: str = Header(None),
+            *args, 
+            **kwargs
+        ):
             try:
-                authorization = request.headers.get('Authorization')
-                x_tenant = request.headers.get('x-tenant')
+                # Get headers from request directly
+                headers = request.headers
+                auth_header = headers.get('Authorization')
+                tenant_header = headers.get('x-tenant')
                 
-                if not authorization:
-                    raise HTTPException(status_code=401, detail="Authorization header is required")
-                if not x_tenant:
-                    raise HTTPException(status_code=401, detail="x-tenant header is required")
-                
-                client = AuthClient(authorization=authorization, x_tenant=x_tenant)
+                if not auth_header:
+                    raise AuthenticationError("Authorization header is required")
+                if not tenant_header:
+                    raise AuthenticationError("x-tenant header is required")
+                    
+                client = AuthClient(authorization=auth_header, x_tenant=tenant_header)
                 auth_result = client.validate_access(
                     resource_id=resource_id,
                     resource_type=resource_type,
@@ -51,21 +56,30 @@ def requires_auth(resource_id: Optional[str] = None,
                     return_data=include_auth_data
                 )
                 
+                # Check authorization result
                 if include_auth_data:
                     if not auth_result.get('authorized', False):
-                        raise HTTPException(status_code=403, 
-                            detail=f"Access denied to resource: {resource_id or resource_type}")
-                    kwargs['auth_data'] = auth_result
-                elif not auth_result:
-                    raise HTTPException(status_code=403, 
-                        detail=f"Access denied to resource: {resource_id or resource_type}")
+                        raise AuthorizationError(
+                            f"Access denied to resource: {resource_id or resource_type}"
+                        )
+                    # Only add auth_data if function accepts it
+                    import inspect
+                    sig = inspect.signature(func)
+                    if 'auth_data' in sig.parameters:
+                        kwargs['auth_data'] = auth_result
+                else:
+                    if not auth_result:
+                        raise AuthorizationError(
+                            f"Access denied to resource: {resource_id or resource_type}"
+                        )
                 
-                # Call the original function
                 return await func(*args, **kwargs)
                 
-            except Exception as e:
-                if isinstance(e, HTTPException):
-                    raise e
+            except AuthenticationError as e:
+                raise HTTPException(status_code=401, detail=str(e))
+            except AuthorizationError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            except ApiError as e:
                 raise HTTPException(status_code=500, detail=str(e))
                 
         return wrapper
