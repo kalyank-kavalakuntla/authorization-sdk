@@ -2,7 +2,7 @@
 
 import functools
 from typing import Optional
-from fastapi import Request, HTTPException
+from fastapi import Request, HTTPException, Depends
 from .client import AuthClient
 
 def requires_auth(resource_id: Optional[str] = None, 
@@ -19,7 +19,15 @@ def requires_auth(resource_id: Optional[str] = None,
     """
     def decorator(func):
         @functools.wraps(func)
-        async def wrapper(request: Request, *args, **kwargs):
+        async def wrapper(*args, **kwargs):
+            from fastapi import Request, Depends
+            
+            # Get request from FastAPI's dependency injection
+            request = kwargs.get('request')
+            if not request:
+                async def get_request(request: Request = Depends()) -> Request:
+                    return request
+                request = await get_request()
             try:
                 # Get headers from request
                 authorization = request.headers.get('Authorization')
