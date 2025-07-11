@@ -1,8 +1,8 @@
 """Decorator module for authorization checks."""
 
 import functools
-from .client import AuthClient
-from .exceptions import AuthorizationError
+from fastapi import Header, Request, HTTPException
+from .client import AuthClient, AuthenticationError, AuthorizationError, ApiError
 
 def requires_auth(resource_id=None, resource_type=None, action=None, include_auth_data=False):
     """Decorator to check authorization before executing a function.
@@ -30,27 +30,42 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
     """
     def decorator(func):
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            client = AuthClient()
-            auth_result = client.validate_access(
-                resource_id=resource_id,
-                resource_type=resource_type,
-                action=action,
-                return_data=include_auth_data
-            )
-            
-            if include_auth_data:
-                if not auth_result.get('authorized', False):
-                    raise AuthorizationError(
-                        f"Access denied to resource: {resource_id}"
-                    )
-                kwargs['auth_data'] = auth_result
-            else:
-                if not auth_result:
-                    raise AuthorizationError(
-                        f"Access denied to resource: {resource_id}"
-                    )
-            
-            return func(*args, **kwargs)
+        async def wrapper(
+            request: Request,
+            authorization: str = Header(...),
+            x_tenant: str = Header(...),
+            *args, 
+            **kwargs
+        ):
+            try:
+                client = AuthClient(authorization=authorization, x_tenant=x_tenant)
+                auth_result = client.validate_access(
+                    resource_id=resource_id,
+                    resource_type=resource_type,
+                    action=action,
+                    return_data=include_auth_data
+                )
+                
+                if include_auth_data:
+                    if not auth_result.get('authorized', False):
+                        raise AuthorizationError(
+                            f"Access denied to resource: {resource_id or resource_type}"
+                        )
+                    kwargs['auth_data'] = auth_result
+                else:
+                    if not auth_result:
+                        raise AuthorizationError(
+                            f"Access denied to resource: {resource_id or resource_type}"
+                        )
+                
+                return await func(*args, **kwargs)
+                
+            except AuthenticationError as e:
+                raise HTTPException(status_code=401, detail=str(e))
+            except AuthorizationError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            except ApiError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+                
         return wrapper
     return decorator
