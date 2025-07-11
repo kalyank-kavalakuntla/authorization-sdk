@@ -12,38 +12,22 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
         resource_type (str, optional): Type of the resource (e.g., 'TENANT', 'USER')
         action (str, optional): Action to validate (e.g., 'READ', 'WRITE', 'DELETE')
         include_auth_data (bool, optional): If True, passes auth response data to the decorated function
-    
-    Returns:
-        function: Decorated function that checks authorization
-    
-    Raises:
-        AuthenticationError: If JWT token is invalid
-        AuthorizationError: If access is denied
-        ApiError: If API request fails
-    
-    Example:
-        @requires_auth(resource_id="resource123", include_auth_data=True)
-        def protected_function(auth_data=None):
-            # auth_data contains user, tenant, and resource information
-            user = auth_data.get('user')
-            print(f"Hello {user['name']}")
     """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(
             request: Request,
-            *args, 
+            *args,
             **kwargs
         ):
             try:
-                # Get headers directly from request
                 authorization = request.headers.get('Authorization')
                 x_tenant = request.headers.get('x-tenant')
                 
                 if not authorization:
-                    raise AuthenticationError("Authorization header is required")
+                    raise HTTPException(status_code=401, detail="Authorization header is required")
                 if not x_tenant:
-                    raise AuthenticationError("x-tenant header is required")
+                    raise HTTPException(status_code=401, detail="x-tenant header is required")
                     
                 client = AuthClient(authorization=authorization, x_tenant=x_tenant)
                 auth_result = client.validate_access(
@@ -70,16 +54,14 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                             f"Access denied to resource: {resource_id or resource_type}"
                         )
                 
-                # Check if function requires request parameter
+                # Check if function expects request parameter
+                import inspect
                 sig = inspect.signature(func)
-                if 'request' in sig.parameters and sig.parameters['request'].default == inspect.Parameter.empty:
+                if 'request' in sig.parameters:
                     kwargs['request'] = request
                 
-                # Check if function is async
-                import asyncio
-                if asyncio.iscoroutinefunction(func):
-                    return await func(*args, **kwargs)
-                return func(*args, **kwargs)
+                # Call the function
+                return await func(*args, **kwargs)
                 
             except AuthenticationError as e:
                 raise HTTPException(status_code=401, detail=str(e))
