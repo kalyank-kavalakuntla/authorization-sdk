@@ -72,8 +72,11 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                         raise AuthorizationError(
                             f"Access denied to resource: {resource_id or resource_type}"
                         )
-                # Pass request and other args to the function
-                return await func(request=request, *args, **kwargs)
+                # Check if the function is async
+                import inspect
+                if inspect.iscoroutinefunction(func):
+                    return await func(request=request, *args, **kwargs)
+                return func(request=request, *args, **kwargs)
                 
             except AuthenticationError as e:
                 raise HTTPException(status_code=401, detail=str(e))
