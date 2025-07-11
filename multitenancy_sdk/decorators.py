@@ -73,6 +73,11 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                             f"Access denied to resource: {resource_id or resource_type}"
                         )
                 
+                # Check if function requires request parameter
+                sig = inspect.signature(func)
+                if 'request' in sig.parameters and sig.parameters['request'].default == inspect.Parameter.empty:
+                    kwargs['request'] = request
+                
                 return await func(*args, **kwargs)
                 
             except AuthenticationError as e:
