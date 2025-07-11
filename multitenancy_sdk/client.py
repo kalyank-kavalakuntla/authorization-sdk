@@ -48,32 +48,42 @@ class AuthClient:
             'x-tenant': x_tenant or self.x_tenant
         }
         
+        # Prepare query parameters
         params = {}
         if resource_id:
             params['resourceId'] = resource_id
         if resource_type:
-            params['resourceType'] = resource_type
+            params['resource'] = resource_type.upper()  # API expects uppercase
         if action:
-            params['action'] = action
+            params['action'] = action.upper()  # API expects uppercase
 
         try:
-            response = requests.get(
+            response = requests.post(
                 f'{self.auth_url}/validate',
                 headers=headers,
-                params=params
+                params=params  # Send as query parameters
             )
             
-            if response.status_code == 401:
-                raise AuthenticationError("Invalid or expired token")
+            response_data = response.json()
             
+            if response.status_code == 400:
+                raise AuthenticationError(response_data.get('message', 'Validation failed'))
+                
             if response.status_code == 403:
-                raise AuthorizationError(f"Access denied to resource: {resource_id}")
-            
+                raise AuthorizationError(response_data.get('message', 'Access denied'))
+                
             if response.status_code != 200:
                 raise ApiError(f"API request failed: {response.text}")
+                
+            # Extract data from the ApiResponse wrapper
+            if not response_data.get('success', False):
+                raise AuthorizationError(response_data.get('message', 'Access denied'))
+                
+            validation_response = response_data.get('data', {})
             
-            data = response.json()
-            return data if return_data else data.get('authorized', False)
+            if return_data:
+                return validation_response
+            return validation_response.get('authorized', False)
             
         except requests.exceptions.RequestException as e:
             raise ApiError(f"Failed to connect to auth service: {str(e)}")
