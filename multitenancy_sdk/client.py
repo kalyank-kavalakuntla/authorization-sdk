@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, Depends, HTTPException
+from fastapi import Header, HTTPException
 from typing import Optional
 import os
 from functools import wraps
@@ -15,7 +15,12 @@ class ApiError(Exception):
 
 class AuthClient:
     def __init__(self, authorization: str = None, x_tenant: str = None):
-        """Initialize AuthClient with optional headers."""
+        """Initialize AuthClient with authorization headers.
+        
+        Args:
+            authorization (str): The authorization header value (required)
+            x_tenant (str): The x-tenant header value (required)
+        """
         self.auth_url = os.getenv('AUTH_SERVICE_URL')
         if not self.auth_url:
             raise ValueError("AUTH_SERVICE_URL environment variable is required")
@@ -138,22 +143,3 @@ def requires_auth(
                 
         return wrapper
     return decorator
-
-# Example usage:
-app = FastAPI()
-
-@app.get("/users/{user_id}")
-@requires_auth(
-    resource_type="USER",
-    action="READ",
-    include_auth_data=True
-)
-async def get_user(
-    user_id: str,
-    auth_data: dict = None
-):
-    return {
-        "user_id": user_id,
-        "authorized_by": auth_data['user']['name'],
-        "tenant": auth_data['tenant']['name']
-    }
