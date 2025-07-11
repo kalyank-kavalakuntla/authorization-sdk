@@ -4,6 +4,15 @@ import os
 from functools import wraps
 import requests
 
+class AuthenticationError(Exception):
+    pass
+
+class AuthorizationError(Exception):
+    pass
+
+class ApiError(Exception):
+    pass
+
 class AuthClient:
     def __init__(self, authorization: str = None, x_tenant: str = None):
         """Initialize AuthClient with optional headers."""
@@ -23,13 +32,16 @@ class AuthClient:
         return_data: bool = False
     ):
         """Validate access using provided or instance headers"""
+        if not authorization and not self.authorization:
+            raise AuthenticationError("Authorization header is required")
+        if not x_tenant and not self.x_tenant:
+            raise AuthenticationError("x-tenant header is required")
+
         headers = {
             'Content-Type': 'application/json',
             'Authorization': authorization or self.authorization,
+            'x-tenant': x_tenant or self.x_tenant
         }
-        
-        if x_tenant or self.x_tenant:
-            headers['x-tenant'] = x_tenant or self.x_tenant
         
         params = {}
         if resource_id:
@@ -67,38 +79,63 @@ def requires_auth(
     action: str = None,
     include_auth_data: bool = False
 ):
-    """Authorization decorator that uses request headers"""
+    """Authorization decorator that uses request headers.
+    
+    Args:
+        resource_id (str, optional): The ID of the resource to check access for
+        resource_type (str, optional): The type of resource (e.g., 'USER', 'DOCUMENT')
+        action (str, optional): The action being performed (e.g., 'READ', 'WRITE')
+        include_auth_data (bool, optional): If True, injects auth_data into the decorated function
+    
+    The decorator automatically extracts the Authorization and x-tenant headers from the request.
+    No manual token handling is required.
+    
+    Usage:
+        @app.get("/api/resource")
+        @requires_auth(resource_type="RESOURCE", action="READ")
+        async def get_resource():
+            return {"message": "Access granted"}
+    """
     def decorator(func):
         @wraps(func)
         async def wrapper(
-            authorization: str = Header(...),
-            x_tenant: str = Header(None),
+            authorization: str = Header(...),  # Required header
+            x_tenant: str = Header(...),      # Required header
             *args,
             **kwargs
         ):
-            client = AuthClient(authorization=authorization, x_tenant=x_tenant)
-            auth_result = client.validate_access(
-                resource_id=resource_id,
-                resource_type=resource_type,
-                action=action,
-                return_data=include_auth_data
-            )
-            
-            if include_auth_data:
-                if not auth_result.get('authorized', False):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Access denied to resource: {resource_id}"
-                    )
-                kwargs['auth_data'] = auth_result
-            else:
-                if not auth_result:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Access denied to resource: {resource_id}"
-                    )
-            
-            return await func(*args, **kwargs)
+            try:
+                client = AuthClient(authorization=authorization, x_tenant=x_tenant)
+                auth_result = client.validate_access(
+                    resource_id=resource_id,
+                    resource_type=resource_type,
+                    action=action,
+                    return_data=include_auth_data
+                )
+                
+                if include_auth_data:
+                    if not auth_result.get('authorized', False):
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Access denied to resource: {resource_id or resource_type}"
+                        )
+                    kwargs['auth_data'] = auth_result
+                else:
+                    if not auth_result:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Access denied to resource: {resource_id or resource_type}"
+                        )
+                
+                return await func(*args, **kwargs)
+                
+            except AuthenticationError as e:
+                raise HTTPException(status_code=401, detail=str(e))
+            except AuthorizationError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            except ApiError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+                
         return wrapper
     return decorator
 
@@ -107,7 +144,6 @@ app = FastAPI()
 
 @app.get("/users/{user_id}")
 @requires_auth(
-    resource_id="user-123",
     resource_type="USER",
     action="READ",
     include_auth_data=True
@@ -120,27 +156,4 @@ async def get_user(
         "user_id": user_id,
         "authorized_by": auth_data['user']['name'],
         "tenant": auth_data['tenant']['name']
-    }
-
-# Direct client usage
-@app.post("/documents")
-async def create_document(
-    document: dict,
-    authorization: str = Header(...),
-    x_tenant: str = Header(None)
-):
-    client = AuthClient(authorization=authorization, x_tenant=x_tenant)
-    auth_result = client.validate_access(
-        resource_type="DOCUMENT",
-        action="CREATE",
-        return_data=True
-    )
-    
-    if not auth_result['authorized']:
-        raise HTTPException(status_code=403, detail="Permission denied")
-    
-    return {
-        "message": "Document created",
-        "user": auth_result['user']['name'],
-        "tenant": auth_result['tenant']['name']
     }
