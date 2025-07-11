@@ -78,7 +78,11 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                 if 'request' in sig.parameters and sig.parameters['request'].default == inspect.Parameter.empty:
                     kwargs['request'] = request
                 
-                return await func(*args, **kwargs)
+                # Check if function is async
+                import asyncio
+                if asyncio.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+                return func(*args, **kwargs)
                 
             except AuthenticationError as e:
                 raise HTTPException(status_code=401, detail=str(e))
