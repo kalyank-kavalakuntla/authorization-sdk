@@ -31,15 +31,17 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(
-            authorization: str = Header(None, alias="Authorization"),
-            x_tenant: str = Header(None, alias="x-tenant"),
+            request: Request,
+            authorization: str = Header(None),
+            x_tenant: str = Header(None),
             *args, 
             **kwargs
         ):
             try:
-                # Convert header values to strings
-                auth_header = str(authorization) if authorization else None
-                tenant_header = str(x_tenant) if x_tenant else None
+                # Get headers from request directly
+                headers = request.headers
+                auth_header = headers.get('Authorization')
+                tenant_header = headers.get('x-tenant')
                 
                 if not auth_header:
                     raise AuthenticationError("Authorization header is required")
