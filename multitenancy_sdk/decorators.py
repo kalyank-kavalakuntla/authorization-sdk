@@ -56,12 +56,17 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                     return_data=include_auth_data
                 )
                 
+                # Check authorization result
                 if include_auth_data:
                     if not auth_result.get('authorized', False):
                         raise AuthorizationError(
                             f"Access denied to resource: {resource_id or resource_type}"
                         )
-                    kwargs['auth_data'] = auth_result
+                    # Only add auth_data if function accepts it
+                    import inspect
+                    sig = inspect.signature(func)
+                    if 'auth_data' in sig.parameters:
+                        kwargs['auth_data'] = auth_result
                 else:
                     if not auth_result:
                         raise AuthorizationError(
