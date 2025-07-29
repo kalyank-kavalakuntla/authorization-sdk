@@ -34,9 +34,28 @@ class AuthClient:
         action: str = None,
         authorization: str = None,
         x_tenant: str = None,
-        return_data: bool = False
+        return_data: bool = False,
+        auth_only: bool = False
     ):
-        """Validate access using provided or instance headers"""
+        """Validate access using provided or instance headers
+        
+        Args:
+            resource_id (str, optional): ID of the specific resource to check access for
+            resource_type (str, optional): Type of resource to check (e.g., 'USER', 'TENANT')
+            action (str, optional): Action to check permission for (e.g., 'READ', 'WRITE')
+            authorization (str, optional): Authorization header override
+            x_tenant (str, optional): x-tenant header override
+            return_data (bool, optional): If True, returns the full validation response
+            auth_only (bool, optional): If True, performs authentication-only validation without checking permissions
+        
+        Returns:
+            bool or dict: If return_data is False, returns True if authorized, otherwise returns the full validation response
+        
+        Raises:
+            AuthenticationError: If authentication fails
+            AuthorizationError: If authorization fails
+            ApiError: If API request fails
+        """
         if not authorization and not self.authorization:
             raise AuthenticationError("Authorization header is required")
         if not x_tenant and not self.x_tenant:
@@ -50,12 +69,16 @@ class AuthClient:
         
         # Prepare query parameters
         params = {}
-        if resource_id:
-            params['resourceId'] = resource_id
-        if resource_type:
-            params['resource'] = resource_type.upper()  # API expects uppercase
-        if action:
-            params['action'] = action.upper()  # API expects uppercase
+        if auth_only:
+            params['authOnly'] = 'true'
+        else:
+            # Only include resource/action params if not in auth_only mode
+            if resource_id:
+                params['resourceId'] = resource_id
+            if resource_type:
+                params['resource'] = resource_type.upper()  # API expects uppercase
+            if action:
+                params['action'] = action.upper()  # API expects uppercase
 
         try:
             response = requests.post(

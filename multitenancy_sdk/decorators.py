@@ -4,7 +4,7 @@ import functools
 from fastapi import Header, Request, HTTPException
 from .client import AuthClient, AuthenticationError, AuthorizationError, ApiError
 
-def requires_auth(resource_id=None, resource_type=None, action=None, include_auth_data=False):
+def requires_auth(resource_id=None, resource_type=None, action=None, include_auth_data=False, auth_only=False):
     """Decorator to check authorization before executing a function.
     
     Args:
@@ -12,6 +12,7 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
         resource_type (str, optional): Type of the resource (e.g., 'TENANT', 'USER')
         action (str, optional): Action to validate (e.g., 'READ', 'WRITE', 'DELETE')
         include_auth_data (bool, optional): If True, passes auth response data to the decorated function
+        auth_only (bool, optional): If True, performs authentication-only validation without checking permissions
     
     Returns:
         function: Decorated function that checks authorization
@@ -27,6 +28,13 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
             # auth_data contains user, tenant, and resource information
             user = auth_data.get('user')
             print(f"Hello {user['name']}")
+            
+        # For authentication-only validation:
+        @requires_auth(auth_only=True, include_auth_data=True)
+        def get_user_profile(auth_data=None):
+            # Only checks if the user is authenticated, not permissions
+            user = auth_data.get('user')
+            return {"profile": user}
     """
     def decorator(func):
         @functools.wraps(func)
@@ -53,7 +61,8 @@ def requires_auth(resource_id=None, resource_type=None, action=None, include_aut
                     resource_id=resource_id,
                     resource_type=resource_type,
                     action=action,
-                    return_data=include_auth_data
+                    return_data=include_auth_data,
+                    auth_only=auth_only
                 )
                 
                 # Check authorization result
